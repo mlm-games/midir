@@ -3,7 +3,7 @@ members = [".", "examples/browser"]
 
 [package]
 name = "midir"
-version = "0.10.2"
+version = "0.11.0"
 authors = ["Patrick Reisert"]
 description = "A cross-platform, realtime MIDI processing library, inspired by RtMidi."
 repository = "https://github.com/Boddlnagg/midir"
@@ -71,3 +71,13 @@ web-sys = { version = "0.3", features = [
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.2"
+
+# Android parts.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.21", default-features = false }
+ndk-context = "0.1"
+jni-min-helper = "0.3"
+
+# Link to libamidi on Android at link time. No Rust crate needed, is already provided by the NDK.
+[target.'cfg(target_os = "android")'.build-dependencies]
+cc = "1.0"
