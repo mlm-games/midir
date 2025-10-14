@@ -498,6 +498,9 @@ impl MidiInput {
     }
 }
 
+unsafe impl<T: Send> Send for MidiInputConnection<T> {}
+unsafe impl<T: Send> Sync for MidiInputConnection<T> {}
+
 pub struct MidiInputConnection<T> {
     java_device: GlobalRef,
     amidi_device: *mut AMidiDevice,
@@ -674,6 +677,8 @@ impl MidiOutput {
         ))
     }
 }
+
+unsafe impl Sync for MidiOutputConnection {}
 
 pub struct MidiOutputConnection {
     java_device: GlobalRef,
