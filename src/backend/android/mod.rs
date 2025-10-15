@@ -113,30 +113,8 @@ fn get_devices<'a>(
     env: &mut JNIEnv<'a>,
     midi_manager: &JObject<'a>,
 ) -> Result<Vec<JObject<'a>>, InitError> {
-    let mm_class = env
-        .find_class("android/media/midi/MidiManager")
-        .map_err(|_| InitError)?;
-    // getDevicesForTransport(int) for API 33+, else getDevices()
-    let devices_obj = if env
-        .get_method_id(
-            &mm_class,
-            "getDevicesForTransport",
-            "(I)[Landroid/media/midi/MidiDeviceInfo;",
-        )
-        .is_ok()
-    {
-        // TRANSPORT_MIDI_BYTE_STREAM = 1
-        env.call_method(
-            midi_manager,
-            "getDevicesForTransport",
-            "(I)[Landroid/media/midi/MidiDeviceInfo;",
-            &[JValue::from(1 as jint)],
-        )
-        .map_err(|_| InitError)?
-        .l()
-        .map_err(|_| InitError)?
-    } else {
-        env.call_method(
+    let devices_obj = env
+        .call_method(
             midi_manager,
             "getDevices",
             "()[Landroid/media/midi/MidiDeviceInfo;",
@@ -144,8 +122,7 @@ fn get_devices<'a>(
         )
         .map_err(|_| InitError)?
         .l()
-        .map_err(|_| InitError)?
-    };
+        .map_err(|_| InitError)?;
 
     let arr: JObjectArray<'_> = devices_obj.into();
     let len = env.get_array_length(&arr).map_err(|_| InitError)? as i32;
