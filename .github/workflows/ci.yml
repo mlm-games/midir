@@ -72,7 +72,7 @@ jobs:
               target: i686-pc-windows-gnu,
               features: "winrt",
               setup: windows-gnu,
-              allow_fail: true,
+              allow_fail: true, # Check nd remove
             }
           - {
               name: macOS (CoreMIDI),
@@ -87,7 +87,7 @@ jobs:
               target: "",
               features: "jack",
               setup: macos-jack,
-              continue-on-error: true, # TODO: fix in src later
+              allow_fail: true,
             }
           - {
               name: iOS (Mac Catalyst aarch64-apple-ios-macabi),
@@ -151,6 +151,7 @@ jobs:
           rustup update stable
           if [ -n "${{ matrix.target }}" ]; then rustup target add ${{ matrix.target }}; fi
         shell: bash
+
       - name: Setup Windows GNU toolchain
         if: matrix.setup == 'windows-gnu'
         uses: msys2/setup-msys2@v2
@@ -165,6 +166,16 @@ jobs:
         if: matrix.setup == 'macos-jack'
         run: brew install jack
 
+      - name: macOS pkg-config path for JACK
+        if: matrix.setup == 'macos-jack'
+        run: echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig" >> $GITHUB_ENV
+
+      - name: Start JACK (macOS)
+        if: matrix.setup == 'macos-jack'
+        run: |
+          jackd -d dummy >/tmp/jack.log 2>&1 & disown
+          sleep 2
+
       - name: Setup iOS (Mac Catalyst)
         if: matrix.setup == 'ios-macabi'
         run: rustup target add aarch64-apple-ios-macabi
@@ -174,6 +185,12 @@ jobs:
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r26d
+          local-cache: true
+
+      - name: Export ANDROID_NDK_HOME for cargo-ndk
+        if: matrix.setup == 'android'
+        run: echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME:-$NDK_HOME}" >> $GITHUB_ENV
+
       - name: Install cargo-ndk and Android targets
         if: matrix.setup == 'android'
         run: |
@@ -198,9 +215,11 @@ jobs:
         if: matrix.setup == 'windows-gnu'
         shell: msys2 {0}
         run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
+          export PATH="$(cygpath -u "$USERPROFILE")/.cargo/bin:$PATH"
           rustup update stable
           rustup target add ${{ matrix.target }}
+          export CARGO_TARGET_I686_PC_WINDOWS_GNU_LINKER=i686-w64-mingw32-gcc
+          export CARGO_TARGET_I686_PC_WINDOWS_GNU_AR=i686-w64-mingw32-ar
           cargo build --verbose --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) }}
 
       - name: Build (Android via cargo-ndk, API 29)
@@ -214,25 +233,36 @@ jobs:
             --target i686-linux-android \
             build --verbose
 
-      - name: Start audio services for testing
-        if: runner.os == 'Linux' && (matrix.setup == 'linux-jack' || matrix.setup == 'linux-alsa')
+      - name: Start JACK (Linux)
+        if: runner.os == 'Linux' && matrix.setup == 'linux-jack'
         run: |
-          if [[ "${{ matrix.setup }}" == "linux-jack" ]]; then
-            sudo apt-get install -y jackd2
-            jackd -d dummy &
-            sleep 2
-          elif [[ "${{ matrix.setup }}" == "linux-alsa" ]]; then
-            sudo modprobe snd-seq
+          sudo apt-get update
+          sudo apt-get install -y jackd2
+          jackd -d dummy >/tmp/jack.log 2>&1 & disown
+          sleep 2
+        shell: bash
+
+      - name: Test (Linux ALSA with gating)
+        if: runner.os == 'Linux' && matrix.setup == 'linux-alsa'
+        run: |
+          FEATURES='${{ matrix.features && format('--features {0}', matrix.features) }}'
+          if [ -e /dev/snd/seq ]; then
+            echo "ALSA sequencer present; running full tests"
+            cargo test --verbose ${FEATURES}
+          else
+            echo "ALSA sequencer not available; skipping end_to_end"
+            cargo test --verbose ${FEATURES} -- --skip end_to_end
           fi
         shell: bash
 
       - name: Test (hosted targets)
         if: >
-          matrix.target == '' ||
-          matrix.target == 'x86_64-unknown-linux-gnu' ||
-          matrix.target == 'x86_64-pc-windows-msvc' ||
-          matrix.target == 'i686-pc-windows-gnu' ||
-          startsWith(matrix.name, 'macOS')
+          (matrix.target == '' ||
+           matrix.target == 'x86_64-unknown-linux-gnu' ||
+           matrix.target == 'x86_64-pc-windows-msvc' ||
+           matrix.target == 'i686-pc-windows-gnu' ||
+           startsWith(matrix.name, 'macOS')) &&
+          matrix.setup != 'linux-alsa'
         run: cargo test --verbose ${{ matrix.features && format('--features {0}', matrix.features) }}
 
   build-beta-nightly:
@@ -320,11 +350,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
+
       - name: Install toolchain
         run: |
           rustup toolchain install ${{ matrix.channel }} --no-self-update
           rustup default ${{ matrix.channel }}
         shell: bash
+
       - name: Setup Linux dependencies
         if: runner.os == 'Linux'
         run: |
@@ -332,32 +364,54 @@ jobs:
           if [[ "${{ matrix.setup }}" == "linux-jack" ]]; then
             sudo apt-get install -y libjack-jackd2-dev
           fi
+
       - name: Setup WASM target
         if: matrix.setup == 'wasm'
         run: rustup target add wasm32-unknown-unknown
+
       - name: Setup Linux aarch64 (cross)
         if: matrix.setup == 'linux-aarch64'
         run: |
           rustup target add aarch64-unknown-linux-gnu
           cargo install cross --locked
+
       - name: Setup Windows MSVC target
         if: matrix.setup == 'windows-msvc'
         run: |
           if [ -n "${{ matrix.target }}" ]; then rustup target add ${{ matrix.target }}; fi
         shell: bash
+
       - name: Setup macOS JACK
         if: matrix.setup == 'macos-jack'
         run: brew install jack
+
+      - name: macOS pkg-config path for JACK
+        if: matrix.setup == 'macos-jack'
+        run: echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig" >> $GITHUB_ENV
+
+      - name: Start JACK (macOS)
+        if: matrix.setup == 'macos-jack'
+        run: |
+          jackd -d dummy >/tmp/jack.log 2>&1 & disown
+          sleep 2
+
       - name: Setup Android NDK
         if: matrix.setup == 'android'
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r26d
+          local-cache: true
+
+      - name: Export ANDROID_NDK_HOME for cargo-ndk
+        if: matrix.setup == 'android'
+        run: echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME:-$NDK_HOME}" >> $GITHUB_ENV
+
       - name: Install cargo-ndk and Android targets
         if: matrix.setup == 'android'
         run: |
           cargo install cargo-ndk --locked
           rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
+
       - name: Build (non-cross/non-android)
         if: matrix.setup != 'linux-aarch64' && matrix.setup != 'android'
         run: |
@@ -367,9 +421,11 @@ jobs:
             cargo build --verbose ${{ matrix.features && format('--features {0}', matrix.features) }}
           fi
         shell: bash
+
       - name: Build (Linux aarch64 via cross)
         if: matrix.setup == 'linux-aarch64'
         run: cross build --verbose --target aarch64-unknown-linux-gnu ${{ matrix.features && format('--features {0}', matrix.features) }}
+
       - name: Build (Android via cargo-ndk, API 29)
         if: matrix.setup == 'android'
         run: |
@@ -380,3 +436,33 @@ jobs:
             --target x86_64-linux-android \
             --target i686-linux-android \
             build --verbose
+
+      - name: Start JACK (Linux)
+        if: runner.os == 'Linux' && matrix.setup == 'linux-jack'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jackd2
+          jackd -d dummy >/tmp/jack.log 2>&1 & disown
+          sleep 2
+        shell: bash
+
+      - name: Test (Linux ALSA with gating)
+        if: runner.os == 'Linux' && matrix.setup == 'linux-alsa'
+        run: |
+          FEATURES='${{ matrix.features && format('--features {0}', matrix.features) }}'
+          if [ -e /dev/snd/seq ]; then
+            echo "ALSA sequencer present; running full tests"
+            cargo test --verbose ${FEATURES}
+          else
+            echo "ALSA sequencer not available; skipping end_to_end"
+            cargo test --verbose ${FEATURES} -- --skip end_to_end
+          fi
+        shell: bash
+
+      - name: Test (hosted targets)
+        if: >
+          (matrix.target == '' ||
+           matrix.target == 'x86_64-unknown-linux-gnu' ||
+           matrix.target == 'x86_64-pc-windows-msvc' ||
+           startsWith(matrix.name, 'macOS'))
+        run: cargo test --verbose ${{ matrix.features && format('--features {0}', matrix.features) }}
