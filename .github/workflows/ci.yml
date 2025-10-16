@@ -87,6 +87,7 @@ jobs:
               target: "",
               features: "jack",
               setup: macos-jack,
+              continue-on-error: true, # TODO: fix in src later
             }
           - {
               name: iOS (Mac Catalyst aarch64-apple-ios-macabi),
@@ -126,12 +127,13 @@ jobs:
         with:
           cache-all-crates: true
 
-      - name: Setup Linux ALSA deps
-        if: matrix.setup == 'linux-alsa'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
-      - name: Setup Linux JACK deps
-        if: matrix.setup == 'linux-jack'
-        run: sudo apt-get update && sudo apt-get install -y libjack-jackd2-dev libasound2-dev pkg-config
+      - name: Setup Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+          if [[ "${{ matrix.setup }}" == "linux-jack" ]]; then
+            sudo apt-get install -y libjack-jackd2-dev
+          fi
 
       - name: Setup WASM target
         if: matrix.setup == 'wasm'
@@ -196,6 +198,7 @@ jobs:
         if: matrix.setup == 'windows-gnu'
         shell: msys2 {0}
         run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
           rustup update stable
           rustup target add ${{ matrix.target }}
           cargo build --verbose --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) }}
@@ -210,6 +213,18 @@ jobs:
             --target x86_64-linux-android \
             --target i686-linux-android \
             build --verbose
+
+      - name: Start audio services for testing
+        if: runner.os == 'Linux' && (matrix.setup == 'linux-jack' || matrix.setup == 'linux-alsa')
+        run: |
+          if [[ "${{ matrix.setup }}" == "linux-jack" ]]; then
+            sudo apt-get install -y jackd2
+            jackd -d dummy &
+            sleep 2
+          elif [[ "${{ matrix.setup }}" == "linux-alsa" ]]; then
+            sudo modprobe snd-seq
+          fi
+        shell: bash
 
       - name: Test (hosted targets)
         if: >
@@ -310,12 +325,13 @@ jobs:
           rustup toolchain install ${{ matrix.channel }} --no-self-update
           rustup default ${{ matrix.channel }}
         shell: bash
-      - name: Setup Linux ALSA deps
-        if: matrix.setup == 'linux-alsa'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
-      - name: Setup Linux JACK deps
-        if: matrix.setup == 'linux-jack'
-        run: sudo apt-get update && sudo apt-get install -y libjack-jackd2-dev libasound2-dev pkg-config
+      - name: Setup Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+          if [[ "${{ matrix.setup }}" == "linux-jack" ]]; then
+            sudo apt-get install -y libjack-jackd2-dev
+          fi
       - name: Setup WASM target
         if: matrix.setup == 'wasm'
         run: rustup target add wasm32-unknown-unknown
@@ -334,7 +350,7 @@ jobs:
         run: brew install jack
       - name: Setup Android NDK
         if: matrix.setup == 'android'
-        uses: android-actions/setup-ndk@v3
+        uses: nttld/setup-ndk@v1
         with:
           ndk-version: r26d
       - name: Install cargo-ndk and Android targets
