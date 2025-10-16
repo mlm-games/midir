@@ -169,7 +169,7 @@ jobs:
 
       - name: Setup Android NDK
         if: matrix.setup == 'android'
-        uses: android-actions/setup-ndk@v3
+        uses: nttld/setup-ndk@v1
         with:
           ndk-version: r26d
       - name: Install cargo-ndk and Android targets
