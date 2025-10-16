@@ -162,7 +162,7 @@ impl<'a> PortInfos<'a> {
     }
 
     pub fn get_c_name(&self, index: usize) -> &CStr {
-        let ptr = self.p[index];
+        let ptr: *const c_char = self.p[index];
         unsafe { CStr::from_ptr(ptr) }
     }
 }
