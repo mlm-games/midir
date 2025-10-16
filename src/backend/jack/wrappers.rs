@@ -2,6 +2,7 @@
 
 use std::ffi::{CStr, CString};
 use std::ops::Index;
+use std::os::raw::c_char;
 use std::{ptr, slice, str};
 
 use libc::{c_void, size_t};
