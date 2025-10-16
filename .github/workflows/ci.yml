@@ -1,0 +1,366 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master, main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-stable:
+    name: Build (stable) — ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.allow_fail || false }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {
+              name: Linux (ALSA),
+              os: ubuntu-latest,
+              target: x86_64-unknown-linux-gnu,
+              features: "",
+              setup: linux-alsa,
+            }
+          - {
+              name: Linux (JACK),
+              os: ubuntu-latest,
+              target: x86_64-unknown-linux-gnu,
+              features: "jack",
+              setup: linux-jack,
+            }
+          - {
+              name: Linux (WASM),
+              os: ubuntu-latest,
+              target: wasm32-unknown-unknown,
+              features: "",
+              setup: wasm,
+            }
+          - {
+              name: Windows (MSVC / WinMM),
+              os: windows-latest,
+              target: x86_64-pc-windows-msvc,
+              features: "",
+              setup: windows-msvc,
+            }
+          - {
+              name: Windows (MSVC / WinRT),
+              os: windows-latest,
+              target: x86_64-pc-windows-msvc,
+              features: "winrt",
+              setup: windows-msvc,
+            }
+          - {
+              name: Windows (GNU i686 / WinMM),
+              os: windows-latest,
+              target: i686-pc-windows-gnu,
+              features: "",
+              setup: windows-gnu,
+            }
+          - {
+              name: Windows (GNU i686 / WinRT),
+              os: windows-latest,
+              target: i686-pc-windows-gnu,
+              features: "winrt",
+              setup: windows-gnu,
+              allow_fail: true,
+            }
+          - {
+              name: macOS (CoreMIDI),
+              os: macos-latest,
+              target: "",
+              features: "",
+              setup: macos,
+            }
+          - {
+              name: macOS (JACK),
+              os: macos-latest,
+              target: "",
+              features: "jack",
+              setup: macos-jack,
+            }
+          - {
+              name: iOS (Mac Catalyst aarch64-apple-ios-macabi),
+              os: macos-latest,
+              target: aarch64-apple-ios-macabi,
+              features: "",
+              setup: ios-macabi,
+            }
+          - {
+              name: Linux (aarch64-unknown-linux-gnu),
+              os: ubuntu-latest,
+              target: aarch64-unknown-linux-gnu,
+              features: "",
+              setup: linux-aarch64,
+            }
+          - {
+              name: Windows (ARM64 MSVC),
+              os: windows-latest,
+              target: aarch64-pc-windows-msvc,
+              features: "",
+              setup: windows-msvc,
+            }
+          - {
+              name: Android (aarch64/armv7/x86_64/i686; API 29),
+              os: ubuntu-latest,
+              target: "",
+              features: "",
+              setup: android,
+            }
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
+
+      - name: Setup Linux ALSA deps
+        if: matrix.setup == 'linux-alsa'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - name: Setup Linux JACK deps
+        if: matrix.setup == 'linux-jack'
+        run: sudo apt-get update && sudo apt-get install -y libjack-jackd2-dev libasound2-dev pkg-config
+
+      - name: Setup WASM target
+        if: matrix.setup == 'wasm'
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Setup Linux aarch64 (cross)
+        if: matrix.setup == 'linux-aarch64'
+        run: |
+          rustup target add aarch64-unknown-linux-gnu
+          cargo install cross --locked
+
+      - name: Setup Windows MSVC toolchain
+        if: matrix.setup == 'windows-msvc'
+        run: |
+          rustup update stable
+          if [ -n "${{ matrix.target }}" ]; then rustup target add ${{ matrix.target }}; fi
+        shell: bash
+      - name: Setup Windows GNU toolchain
+        if: matrix.setup == 'windows-gnu'
+        uses: msys2/setup-msys2@v2
+        with:
+          install: >-
+            base-devel
+            mingw-w64-i686-toolchain
+          msystem: MINGW32
+          update: true
+
+      - name: Setup macOS JACK
+        if: matrix.setup == 'macos-jack'
+        run: brew install jack
+
+      - name: Setup iOS (Mac Catalyst)
+        if: matrix.setup == 'ios-macabi'
+        run: rustup target add aarch64-apple-ios-macabi
+
+      - name: Setup Android NDK
+        if: matrix.setup == 'android'
+        uses: android-actions/setup-ndk@v3
+        with:
+          ndk-version: r26d
+      - name: Install cargo-ndk and Android targets
+        if: matrix.setup == 'android'
+        run: |
+          cargo install cargo-ndk --locked
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
+
+      - name: Build (host/target)
+        if: matrix.setup != 'linux-aarch64' && matrix.setup != 'windows-gnu' && matrix.setup != 'android'
+        run: |
+          if [ -n "${{ matrix.target }}" ]; then
+            cargo build --verbose --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) }}
+          else
+            cargo build --verbose ${{ matrix.features && format('--features {0}', matrix.features) }}
+          fi
+        shell: bash
+
+      - name: Build (Linux aarch64 via cross)
+        if: matrix.setup == 'linux-aarch64'
+        run: cross build --verbose --target aarch64-unknown-linux-gnu ${{ matrix.features && format('--features {0}', matrix.features) }}
+
+      - name: Build (Windows GNU)
+        if: matrix.setup == 'windows-gnu'
+        shell: msys2 {0}
+        run: |
+          rustup update stable
+          rustup target add ${{ matrix.target }}
+          cargo build --verbose --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) }}
+
+      - name: Build (Android via cargo-ndk, API 29)
+        if: matrix.setup == 'android'
+        run: |
+          cargo ndk \
+            --platform 29 \
+            --target aarch64-linux-android \
+            --target armv7-linux-androideabi \
+            --target x86_64-linux-android \
+            --target i686-linux-android \
+            build --verbose
+
+      - name: Test (hosted targets)
+        if: >
+          matrix.target == '' ||
+          matrix.target == 'x86_64-unknown-linux-gnu' ||
+          matrix.target == 'x86_64-pc-windows-msvc' ||
+          matrix.target == 'i686-pc-windows-gnu' ||
+          startsWith(matrix.name, 'macOS')
+        run: cargo test --verbose ${{ matrix.features && format('--features {0}', matrix.features) }}
+
+  build-beta-nightly:
+    name: Build (${{ matrix.channel }}) — ${{ matrix.name }}
+    needs: build-stable
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [beta, nightly]
+        include:
+          - {
+              name: Linux (ALSA),
+              os: ubuntu-latest,
+              target: x86_64-unknown-linux-gnu,
+              features: "",
+              setup: linux-alsa,
+            }
+          - {
+              name: Linux (JACK),
+              os: ubuntu-latest,
+              target: x86_64-unknown-linux-gnu,
+              features: "jack",
+              setup: linux-jack,
+            }
+          - {
+              name: Windows (MSVC),
+              os: windows-latest,
+              target: x86_64-pc-windows-msvc,
+              features: "",
+              setup: windows-msvc,
+            }
+          - {
+              name: Windows (WinRT),
+              os: windows-latest,
+              target: x86_64-pc-windows-msvc,
+              features: "winrt",
+              setup: windows-msvc,
+            }
+          - {
+              name: macOS (CoreMIDI),
+              os: macos-latest,
+              target: "",
+              features: "",
+              setup: macos,
+            }
+          - {
+              name: macOS (JACK),
+              os: macos-latest,
+              target: "",
+              features: "jack",
+              setup: macos-jack,
+            }
+          - {
+              name: WASM,
+              os: ubuntu-latest,
+              target: wasm32-unknown-unknown,
+              features: "",
+              setup: wasm,
+            }
+          - {
+              name: Linux (aarch64),
+              os: ubuntu-latest,
+              target: aarch64-unknown-linux-gnu,
+              features: "",
+              setup: linux-aarch64,
+            }
+          - {
+              name: Windows (ARM64),
+              os: windows-latest,
+              target: aarch64-pc-windows-msvc,
+              features: "",
+              setup: windows-msvc,
+            }
+          - {
+              name: Android (NDK r26d; API 29),
+              os: ubuntu-latest,
+              target: "",
+              features: "",
+              setup: android,
+            }
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Install toolchain
+        run: |
+          rustup toolchain install ${{ matrix.channel }} --no-self-update
+          rustup default ${{ matrix.channel }}
+        shell: bash
+      - name: Setup Linux ALSA deps
+        if: matrix.setup == 'linux-alsa'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - name: Setup Linux JACK deps
+        if: matrix.setup == 'linux-jack'
+        run: sudo apt-get update && sudo apt-get install -y libjack-jackd2-dev libasound2-dev pkg-config
+      - name: Setup WASM target
+        if: matrix.setup == 'wasm'
+        run: rustup target add wasm32-unknown-unknown
+      - name: Setup Linux aarch64 (cross)
+        if: matrix.setup == 'linux-aarch64'
+        run: |
+          rustup target add aarch64-unknown-linux-gnu
+          cargo install cross --locked
+      - name: Setup Windows MSVC target
+        if: matrix.setup == 'windows-msvc'
+        run: |
+          if [ -n "${{ matrix.target }}" ]; then rustup target add ${{ matrix.target }}; fi
+        shell: bash
+      - name: Setup macOS JACK
+        if: matrix.setup == 'macos-jack'
+        run: brew install jack
+      - name: Setup Android NDK
+        if: matrix.setup == 'android'
+        uses: android-actions/setup-ndk@v3
+        with:
+          ndk-version: r26d
+      - name: Install cargo-ndk and Android targets
+        if: matrix.setup == 'android'
+        run: |
+          cargo install cargo-ndk --locked
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
+      - name: Build (non-cross/non-android)
+        if: matrix.setup != 'linux-aarch64' && matrix.setup != 'android'
+        run: |
+          if [ -n "${{ matrix.target }}" ]; then
+            cargo build --verbose --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) }}
+          else
+            cargo build --verbose ${{ matrix.features && format('--features {0}', matrix.features) }}
+          fi
+        shell: bash
+      - name: Build (Linux aarch64 via cross)
+        if: matrix.setup == 'linux-aarch64'
+        run: cross build --verbose --target aarch64-unknown-linux-gnu ${{ matrix.features && format('--features {0}', matrix.features) }}
+      - name: Build (Android via cargo-ndk, API 29)
+        if: matrix.setup == 'android'
+        run: |
+          cargo ndk \
+            --platform 29 \
+            --target aarch64-linux-android \
+            --target armv7-linux-androideabi \
+            --target x86_64-linux-android \
+            --target i686-linux-android \
+            build --verbose
