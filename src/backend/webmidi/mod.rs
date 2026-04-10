@@ -35,7 +35,7 @@ impl Static {
             request: None,
             ever_requested: false,
 
-            on_ok: Closure::wrap(Box::new(|access| {
+            on_ok: Closure::wrap(Box::new(|access: JsValue| {
                 STATIC.with(|s| {
                     let mut s = s.borrow_mut();
                     let access: MidiAccess = access.dyn_into().unwrap();
@@ -76,9 +76,11 @@ impl Static {
             return;
         };
 
+        let mut options = MidiOptions::new();
+        options.set_sysex(sysex);
         let _request = match window
             .navigator()
-            .request_midi_access_with_options(MidiOptions::new().sysex(sysex))
+            .request_midi_access_with_options(&options)
         {
             Ok(p) => {
                 self.request = Some(p.then2(&self.on_ok, &self.on_err));
