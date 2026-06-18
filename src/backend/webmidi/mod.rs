@@ -210,6 +210,9 @@ pub struct MidiInputConnection<T> {
     closure: Closure<dyn FnMut(MidiMessageEvent)>,
 }
 
+// SAFETY: On wasm32 there is only one thread (without atomics feature), needed for wasm
+unsafe impl<T: Send> Send for MidiInputConnection<T> {}
+
 impl<T> MidiInputConnection<T> {
     pub fn close(self) -> (MidiInput, T) {
         let Self {
